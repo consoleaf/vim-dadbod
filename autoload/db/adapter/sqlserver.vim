@@ -94,5 +94,9 @@ function! db#adapter#sqlserver#databases(url) abort
   let cmd = db#adapter#sqlserver#interactive(s:strip_database(a:url))
   let out = db#systemlist(cmd + ['-h-1', '-W', '-Q',
         \ 'SET NOCOUNT ON; SELECT name FROM sys.databases WHERE state_desc = ''ONLINE'' ORDER BY name'])
-  return map(filter(copy(out), '!empty(trim(v:val))'), {_, val -> trim(val)})
+  " Skip empty lines and sqlcmd diagnostics (some environments merge stderr
+  " into the job output even on a zero exit status).
+  return map(filter(copy(out),
+        \ '!empty(trim(v:val)) && v:val !~# "^Sqlcmd:" && v:val !~# "^Msg \d\+"'),
+        \ {_, val -> trim(val)})
 endfunction
