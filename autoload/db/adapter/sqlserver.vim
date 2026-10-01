@@ -97,10 +97,15 @@ endfunction
 
 " List all online databases on the instance, regardless of which database
 " (if any) is set in the URL. Used by UIs to render a database-level tree.
+" db#systemlist waits on the job synchronously, and sqlcmd would block for
+" the OS TCP connect timeout when the endpoint is unreachable - pass a wait
+" timeout (g:db_adapter_sqlserver_query_timeout, default 10 seconds) so
+" callers fail fast with an empty list instead of hanging the editor.
 function! db#adapter#sqlserver#databases(url) abort
   let cmd = db#adapter#sqlserver#interactive(s:strip_database(a:url))
   let out = db#systemlist(cmd + ['-h-1', '-W', '-Q',
-        \ 'SET NOCOUNT ON; SELECT name FROM sys.databases WHERE state_desc = ''ONLINE'' ORDER BY name'])
+        \ 'SET NOCOUNT ON; SELECT name FROM sys.databases WHERE state_desc = ''ONLINE'' ORDER BY name'],
+        \ [], get(g:, 'db_adapter_sqlserver_query_timeout', 10))
   " Skip empty lines and sqlcmd diagnostics (some environments merge stderr
   " into the job output even on a zero exit status).
   return map(filter(copy(out),

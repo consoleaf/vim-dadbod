@@ -235,23 +235,36 @@ function! s:job_stop(job) abort
   endif
 endfunction
 
-function! s:job_wait(job) abort
+" Wait for a job to finish and return 1, or give up after a:1 seconds
+" (stopping the job) and return 0. Without a:1, wait indefinitely.
+function! s:job_wait(job, ...) abort
+  let timeout = a:0 && a:1 > 0 ? a:1 : 0
+  let deadline = timeout ? reltimefloat(reltime()) + timeout : 0
+  let finished = 0
   try
     if has('nvim')
       while jobwait([a:job], 0) == [-1]
+        if deadline != 0 && reltimefloat(reltime()) >= deadline
+          break
+        endif
         sleep 1m
       endwhile
+      let finished = jobwait([a:job], 0) != [-1]
     elseif exists('*job_status')
       while ch_status(a:job) !~# '^closed$\|^fail$' || job_status(a:job) ==# 'run'
+        if deadline != 0 && reltimefloat(reltime()) >= deadline
+          break
+        endif
         sleep 1m
       endwhile
+      let finished = !(ch_status(a:job) !~# '^closed$\|^fail$' || job_status(a:job) ==# 'run')
     endif
-    let finished = 1
   finally
-    if !exists('finished')
+    if !finished
       call s:job_stop(a:job)
     endif
   endtry
+  return finished
 endfunction
 
 function! s:systemlist_job_cb(data, lines, status) abort
@@ -265,13 +278,19 @@ function! s:systemlist_job_cb(data, lines, status) abort
   let a:data.status = a:status
 endfunction
 
-function! s:systemlist(cmd, file) abort
+function! s:systemlist(cmd, file, ...) abort
   let result = {}
   let job = s:job_run(a:cmd, function('s:systemlist_job_cb', [result]), a:file)
-  call s:job_wait(job)
+  if !s:job_wait(job, a:0 ? a:1 : 0)
+    " Killed after the wait timeout: no output, no meaningful status.
+    return [[], -1]
+  endif
   return [get(result, 'lines', []), get(result, 'status', -1)]
 endfunction
 
+" Run cmd (list argv) with optional stdin (a:1, string or list) and an
+" optional wait timeout in seconds (a:2, 0/unset waits indefinitely).
+" Returns the output lines, or [] on failure/timeout.
 function! db#systemlist(cmd, ...) abort
   let file = ''
   try
@@ -279,7 +298,7 @@ function! db#systemlist(cmd, ...) abort
       let file = tempname()
       call writefile(type(a:1) == v:t_string ? split(a:1, "\n", 1) : a:1, file, 'b')
     endif
-    let [lines, exit_status] = s:systemlist(a:cmd, file)
+    let [lines, exit_status] = s:systemlist(a:cmd, file, a:0 > 1 ? a:2 : 0)
     return exit_status ? [] : lines
   finally
     if !empty(file)
@@ -357,11 +376,12 @@ function! db#connect(url) abort
       return url
     endif
     call writefile(split(auth_input, "\n", 1), input, 'b')
-    let [out, exit_status] = call('s:systemlist', filter)
+    let probe_timeout = get(g:, 'db_connect_timeout', 10)
+    let [out, exit_status] = call('s:systemlist', filter + [probe_timeout])
     if exit_status && join(out, "\n") =~? pattern && resolved =~# '^[^:]*://[^:/@]*@'
       let password = inputsecret('Password: ')
       let url = substitute(resolved, '://[^:/@]*\zs@', ':'.db#url#encode(password).'@', '')
-      let [out, exit_status] = call('s:systemlist', s:filter(url, input))
+      let [out, exit_status] = call('s:systemlist', s:filter(url, input) + [probe_timeout])
       if !v:shell_error
         let s:passwords[resolved] = password
       endif
@@ -371,6 +391,11 @@ function! db#connect(url) abort
   endtry
   if !exit_status
     return url
+  endif
+  if empty(out)
+    " s:systemlist returns [[], -1] when the probe was killed after the
+    " timeout instead of reporting a real exit status.
+    throw 'DB exec error: timed out after '.probe_timeout."s (g:db_connect_timeout)"
   endif
   throw 'DB exec error: '.join(out, "\n")
 endfunction
