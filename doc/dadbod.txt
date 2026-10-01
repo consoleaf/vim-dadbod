@@ -216,6 +216,14 @@ same name. The `authentication` property is only supported when using
 To set the `integratedSecurity` connection property and use a trusted
 connection, omit the user and password.
 
+Synchronous sqlcmd invocations are bounded: database enumeration via
+`db#adapter#sqlserver#databases()` gives up after
+`g:db_adapter_sqlserver_query_timeout` seconds (default 10), and the
+connection authentication probe run by `db#connect()` after
+`g:db_connect_timeout` seconds (default 10), so an unreachable server
+fails fast instead of blocking for the TCP connect timeout. The
+interactive sqlcmd session opened by `:DB` is not affected.
+
                                                 *dadbod-sqlite*
 SQLite ~
 >

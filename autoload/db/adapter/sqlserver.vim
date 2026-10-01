@@ -74,10 +74,41 @@ function! s:complete(url, query) abort
   return map(out, 'matchstr(v:val, "\\S\\+")')
 endfunction
 
+function! s:strip_database(url) abort
+  let stripped = matchstr(a:url, '^[^:]\+://.\{-\}/')
+  if empty(stripped)
+    " URLs without a database segment may have no trailing slash at all.
+    return a:url
+  endif
+  " Drop only the path segment; keep query params and fragment intact so
+  " flags like trustServerCertificate (-> -C) survive the round trip.
+  let rest = strpart(a:url, len(stripped))
+  let database = matchstr(rest, '[^?#]*')
+  return stripped . strpart(rest, len(database))
+endfunction
+
 function! db#adapter#sqlserver#complete_database(url) abort
-  return s:complete(matchstr(a:url, '^[^:]\+://.\{-\}/'), 'SELECT NAME FROM sys.sysdatabases')
+  return s:complete(s:strip_database(a:url), 'SELECT NAME FROM sys.sysdatabases')
 endfunction
 
 function! db#adapter#sqlserver#tables(url) abort
   return s:complete(a:url, 'SELECT TABLE_NAME FROM information_schema.tables ORDER BY TABLE_NAME')
+endfunction
+
+" List all online databases on the instance, regardless of which database
+" (if any) is set in the URL. Used by UIs to render a database-level tree.
+" db#systemlist waits on the job synchronously, and sqlcmd would block for
+" the OS TCP connect timeout when the endpoint is unreachable - pass a wait
+" timeout (g:db_adapter_sqlserver_query_timeout, default 10 seconds) so
+" callers fail fast with an empty list instead of hanging the editor.
+function! db#adapter#sqlserver#databases(url) abort
+  let cmd = db#adapter#sqlserver#interactive(s:strip_database(a:url))
+  let out = db#systemlist(cmd + ['-h-1', '-W', '-Q',
+        \ 'SET NOCOUNT ON; SELECT name FROM sys.databases WHERE state_desc = ''ONLINE'' ORDER BY name'],
+        \ [], get(g:, 'db_adapter_sqlserver_query_timeout', 10))
+  " Skip empty lines and sqlcmd diagnostics (some environments merge stderr
+  " into the job output even on a zero exit status).
+  return map(filter(copy(out),
+        \ '!empty(trim(v:val)) && v:val !~# "^Sqlcmd:" && v:val !~# "^Msg \d\+"'),
+        \ {_, val -> trim(val)})
 endfunction
