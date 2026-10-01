@@ -76,8 +76,15 @@ endfunction
 
 function! s:strip_database(url) abort
   let stripped = matchstr(a:url, '^[^:]\+://.\{-\}/')
-  " URLs without a database segment may have no trailing slash at all.
-  return empty(stripped) ? a:url : stripped
+  if empty(stripped)
+    " URLs without a database segment may have no trailing slash at all.
+    return a:url
+  endif
+  " Drop only the path segment; keep query params and fragment intact so
+  " flags like trustServerCertificate (-> -C) survive the round trip.
+  let rest = strpart(a:url, len(stripped))
+  let database = matchstr(rest, '[^?#]*')
+  return stripped . strpart(rest, len(database))
 endfunction
 
 function! db#adapter#sqlserver#complete_database(url) abort
